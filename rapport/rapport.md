@@ -4,19 +4,14 @@ subtitle: "Low-Level LakeHouse with Spark — Projet individuel"
 author: "Ahmed Abidhiaf — MSc Data Engineering & Cloud Computing, 2e année"
 date: "2025-2026"
 ---
-
-<!--
-LÉGENDE
-  [TOI]      = paragraphe à rédiger par Ahmed (analyse, justification, conclusion)
-  [CAPTURE]  = image à placer dans ../captures/ avec le nom indiqué
-  [CHIFFRES] = tableau rempli à partir des fichiers de output/
-Objectif : 5 à 8 pages au total.
--->
-
 # 1. Introduction et environnement
 
-[TOI] 4-5 lignes : contexte (entreprise de mobilité, 3 mois de trajets), objectif du
-pipeline, choix de PySpark et pourquoi.
+Une entreprise de mobilité veut exploiter trois mois de trajets (janvier à mars 2026)
+entre 36 stations réparties sur 3 zones. L'objectif est de construire une chaîne de
+traitement reproductible avec Spark : lecture et contrôle qualité des CSV bruts, calcul
+d'indicateurs avec l'API RDD puis l'API DataFrame, stockage analytique en Parquet, analyse
+des plans d'exécution et construction d'un graphe orienté du réseau. Le projet est réalisé
+en **PySpark**, dans un seul langage de bout en bout.
 
 | Élément | Version |
 |---|---|
@@ -30,7 +25,20 @@ Commande de lancement : voir README.
 # 2. Ingestion et qualité des données
 
 ## 2.1 Structure des enregistrements
-[TOI] Décrire la structure typée choisie (dataclass/namedtuple) et les conversions.
+Chaque ligne valide devient un `namedtuple` Python `Trajet` (dans `src/commun.py`) avec
+des champs nommés et typés après conversion :
+
+| Champ | Type après conversion |
+|---|---|
+| `trajet_id`, `station_depart`, `station_arrivee`, `type_abonnement` | `str` |
+| `date_heure` | `datetime` (format `%Y-%m-%d %H:%M:%S`) |
+| `duree_min`, `distance_km` | `float` |
+
+Les stations sont lues dans un `namedtuple` `Station` (zone en `int`, coordonnées en
+`float`). La fonction `valider()` convertit une ligne et renvoie soit `("OK", Trajet)`,
+soit `("REJET", motif)`, ce qui permet de séparer les lignes valides et rejetées avec un
+simple `filter`. La liste des identifiants de stations est diffusée aux workers avec
+`sc.broadcast` pour le contrôle des stations connues.
 
 ## 2.2 Règles de rejet
 
@@ -216,23 +224,153 @@ les deux API donnent exactement les mêmes résultats.
 # 5. Plan d'exécution et optimisation
 
 ## 5.1 Transformations étroites et larges
-[CHIFFRES] Tableau : transformation | type | shuffle ?
 
-## 5.2 Lecture du plan / Spark UI
-![Plan physique explain()](../captures/07_explain.png)
-![Spark UI - stages](../captures/08_spark_ui.png)
-[TOI] Où apparaissent les Exchange ?
+Une transformation **étroite** calcule chaque partition de sortie à partir d'une seule
+partition d'entrée : pas d'échange réseau. Une transformation **large** a besoin des données
+de plusieurs partitions : Spark doit faire un *shuffle* et démarre un nouveau stage.
 
-## 5.3 groupByKey vs reduceByKey
-[CHIFFRES] Tableau : variante | run1 | run2 | run3 | moyenne
-[TOI] Interprétation prudente (petit jeu de données), rôle du partitionnement et du cache.
+| Transformation (où dans le pipeline) | Type | Shuffle ? |
+|---|---|---|
+| `map` (parsing et validation, `commun.py`) | étroite | non |
+| `filter` (séparation valides / rejets) | étroite | non |
+| `flatMap` (événements départ/arrivée, étape 2) | étroite | non |
+| `mapValues` (couples (durée, 1)) | étroite | non |
+| `reduceByKey` (comptages, sommes) | large | oui |
+| `join` (doublons, enrichissement avec les noms) | large | oui |
+| `groupByKey` (benchmark) | large | oui |
+| `groupBy().agg()` (DataFrame) | large | oui (`Exchange`) |
+
+## 5.2 Lecture du plan et de l'interface Spark
+
+**Lignée RDD (`toDebugString`, capture 07).** Chaque `+-` marque une frontière de stage,
+c'est-à-dire un shuffle. Pour le simple comptage des départs, on voit trois shuffles : le
+`reduceByKey` de la détection des doublons (`commun.py:81`), le `join` qui garde la première
+occurrence (`commun.py:82`) et le `reduceByKey` final. Les lignes `CachedPartitions`
+montrent que le RDD des trajets valides est lu depuis la mémoire (667 Kio) au lieu d'être
+recalculé.
+
+![Lignée RDD](../captures/07_lignee_rdd.png)
+
+**Plan physique DataFrame (`explain`, capture 07b).** Pour la durée moyenne par zone,
+Catalyst produit :
+
+- un `Scan parquet` qui ne lit que les 2 colonnes utiles (`ReadSchema:
+  struct<station_depart, duree_min>`) : c'est l'avantage du format colonne ;
+- un `BroadcastHashJoin` : la petite table des 36 stations est envoyée à chaque tâche
+  (`BroadcastExchange`), ce qui évite un shuffle de la grande table ;
+- un `HashAggregate` partiel (`partial_avg` = somme + nombre par partition), puis un seul
+  `Exchange hashpartitioning(zone, 200)`, puis l'agrégat final. C'est exactement le principe
+  (somme, nombre) de la partie 3.2, appliqué automatiquement.
+
+![Plan physique](../captures/07b_explain.png)
+
+**Interface Spark (captures 08 et 08b).** L'onglet *Stages* montre les colonnes *Shuffle
+Write* et *Shuffle Read*. Par exemple, le comptage des départs par station n'écrit que
+2,1 Kio de shuffle, alors que le comptage des couples départ–arrivée en écrit 45,1 Kio : il
+y a beaucoup plus de clés distinctes (1 260 couples distincts contre 36 stations).
+
+![Spark UI - Stages](../captures/08_spark_ui.png)
+
+![Spark UI - SQL](../captures/08b_spark_ui_sql.png)
+
+## 5.3 groupByKey vs reduceByKey, partitionnement et cache
+
+Les mesures ont été faites sur le même Mac, en `local[*]`, avec 1 exécution d'échauffement
+puis 5 exécutions chronométrées par variante (`output/benchmark.csv`).
+
+| Variante | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Médiane (s) |
+|---|---|---|---|---|---|---|
+| RDD groupByKey | 0,094 | 0,096 | 0,089 | 0,086 | 0,091 | **0,091** |
+| RDD reduceByKey | 0,085 | 0,089 | 0,085 | 0,084 | 0,089 | **0,085** |
+| DataFrame – 200 partitions de shuffle | 0,018 | 0,015 | 0,016 | 0,016 | 0,015 | **0,016** |
+| DataFrame – 8 partitions de shuffle | 0,017 | 0,016 | 0,016 | 0,016 | 0,017 | **0,016** |
+| Deux indicateurs sans cache | 0,205 | 0,210 | 0,208 | 0,199 | 0,199 | **0,205** |
+| Deux indicateurs avec cache | 0,170 | 0,175 | 0,167 | 0,170 | 0,169 | **0,170** |
+
+![Benchmark](../captures/07c_benchmark.png)
+
+Volume écrit par le shuffle, relevé via l'API REST de l'interface Spark
+(`output/shuffle_volumes.csv`) :
+
+| Variante | Shuffle write |
+|---|---|
+| groupByKey | 74 963 octets (73,2 Kio) |
+| reduceByKey | 3 087 octets (3,0 Kio) |
+
+**groupByKey vs reduceByKey.** Les temps sont très proches (6 ms d'écart sur la médiane),
+mais le volume échangé est environ **24 fois plus faible** avec `reduceByKey`. En effet,
+`groupByKey` envoie les 24 000 durées sur le réseau avant de les additionner, alors que
+`reduceByKey` combine d'abord localement dans chaque partition et n'envoie qu'un couple
+(somme, nombre) par station et par partition. Sur 24 000 lignes et une seule machine, ce
+gain ne se voit presque pas en temps ; sur un vrai cluster, le shuffle passe par le réseau
+et le disque, et c'est lui qui coûte le plus cher.
+
+**Partitionnement.** Par défaut, un shuffle DataFrame crée 200 partitions, beaucoup trop
+pour 3 zones. Avec 8 partitions, le temps ne change pas ici, car l'*Adaptive Query
+Execution* (`AdaptiveSparkPlan` dans le plan) fusionne automatiquement les partitions vides
+après le shuffle. Côté RDD, le fichier est lu en 2 partitions puis 4 après les jointures :
+ce nombre fixe le parallélisme maximal (une tâche par partition, visible dans la colonne
+*Tasks 4/4*).
+
+**Cache.** Sans `cache()`, chaque action relit le CSV et refait toute la validation (parsing,
+doublons, jointure). Avec le cache, les deux indicateurs repartent du RDD en mémoire :
+médiane de 0,205 s à 0,170 s, soit environ 17 % de moins. Le cache est pertinent ici parce
+que le même RDD nettoyé est réutilisé par plusieurs indicateurs.
+
+**Limite.** Ces mesures portent sur un petit jeu de données, sur une seule machine, et les
+écarts sont de quelques millisecondes. Elles ne prouvent pas une accélération générale :
+elles illustrent seulement des mécanismes (volume de shuffle, recalcul évité) qui
+deviennent importants à plus grande échelle.
 
 # 6. Graphe orienté du réseau
 
-[TOI] Définition annoncée de « station la plus connectée ».
-[CHIFFRES] Degrés entrants/sortants + top 5
+Le graphe est construit en RDD (`05_graphe.py`) : les **sommets** sont les 36 stations, et
+chaque **arc** `départ → arrivée` porte comme poids le nombre de trajets, obtenu par
+`reduceByKey` sur les couples `((départ, arrivée), 1)`. Résultat : 36 sommets,
+**1 260 arcs**, pour un poids total de 24 000 trajets.
+
+**Constat important.** 1 260 = 36 × 35 : le graphe est **complet**. Chaque station envoie et
+reçoit des trajets de toutes les autres, donc tous les degrés non pondérés valent 35
+(entrant et sortant). Le degré simple ne permet pas de distinguer les stations.
+
+**Définition annoncée.** Une station est d'autant plus connectée que son **degré total
+pondéré** est élevé, c'est-à-dire le nombre de trajets entrants + sortants. En cas
+d'égalité, on départage par le degré non pondéré, puis par l'identifiant.
+
+| Rang | Station | Zone | Entrants | Sortants | Degré total pondéré |
+|---|---|---|---|---|---|
+| 1 | S25 | 3 | 693 | 716 | **1 409** |
+| 2 | S14 | 2 | 665 | 724 | **1 389** |
+| 3 | S02 | 1 | 688 | 686 | **1 374** |
+| 4 | S16 | 2 | 662 | 711 | **1 373** |
+| 5 | S07 | 1 | 697 | 672 | **1 369** |
+
+Ces valeurs sont cohérentes avec la partie 3.1 : pour S25, 716 départs + 693 arrivées =
+1 409. Les trois zones sont représentées dans le top 5, et les écarts restent faibles
+(1 369 à 1 409, soit moins de 3 %) : le réseau synthétique est très homogène. Les arcs les
+plus lourds sont les mêmes que le top 10 de la partie 3.3 (S27 → S13 : 33 trajets).
+Les degrés complets et la liste des arcs sont dans `output/graphe_degres.csv` et
+`output/graphe_arcs.csv`.
+
 ![Top 5 graphe](../captures/09_graphe_top5.png)
 
 # 7. Limites et conclusion
 
-[TOI] 6-8 lignes.
+Le pipeline va des CSV bruts jusqu'aux indicateurs et au graphe, de façon reproductible :
+5 lignes sont rejetées avec un motif explicite, 24 000 trajets sont validés, et les
+versions RDD et DataFrame donnent des résultats identiques. Les données nettoyées sont
+stockées en Parquet partitionné par mois.
+
+Limites :
+
+- **Données synthétiques et homogènes.** Le graphe complet et les durées moyennes quasi
+  identiques par zone montrent un réseau sans vraie structure. Sur des données réelles, les
+  différences entre stations seraient plus marquées.
+- **Mesures de performance.** Elles sont faites sur un seul Mac en mode local, avec un petit
+  volume : elles illustrent des mécanismes (volume de shuffle, cache) sans prouver un gain
+  général.
+- **Règle des doublons.** « Première occurrence » est déterministe mais repose sur l'ordre
+  du fichier. Si les données arrivaient de plusieurs fichiers, il faudrait une autre clé
+  d'ordre, par exemple une date d'ingestion.
+- **Pas de table transactionnelle.** Le Parquet ne gère ni mises à jour ni historique. Une
+  couche Delta Lake ou Iceberg serait l'étape suivante pour un vrai lakehouse.

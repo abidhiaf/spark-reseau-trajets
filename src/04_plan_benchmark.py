@@ -4,9 +4,11 @@ Usage : python src/04_plan_benchmark.py [--pause]
   --pause : garde Spark ouvert à la fin pour consulter l'interface http://localhost:4040
 """
 import csv
+import json
 import statistics
 import sys
 import time
+import urllib.request
 
 from pyspark.sql import functions as F
 
@@ -108,6 +110,25 @@ valides_sans_cache, _ = charger_trajets(sc, ids_stations)
 resultats.append(chronometrer("Sans cache (relit et revalide le CSV)",
                               lambda: deux_indicateurs(valides_sans_cache)))
 resultats.append(chronometrer("Avec cache", lambda: deux_indicateurs(valides)))
+
+print("d) Volume écrit par le shuffle (API REST de l'interface Spark)")
+sc.setJobDescription("mesure_groupByKey")
+avec_group_by_key()
+sc.setJobDescription("mesure_reduceByKey")
+avec_reduce_by_key()
+sc.setJobDescription(None)
+url_api = f"{sc.uiWebUrl}/api/v1/applications/{sc.applicationId}/stages"
+volumes = {}
+for stage in json.load(urllib.request.urlopen(url_api)):
+    if stage.get("description") in ("mesure_groupByKey", "mesure_reduceByKey") \
+            and stage.get("shuffleWriteBytes", 0) > 0:
+        volumes[stage["description"].replace("mesure_", "")] = stage["shuffleWriteBytes"]
+for nom, octets in sorted(volumes.items()):
+    print(f"  {nom:<38} shuffle write = {octets:>8} octets ({octets / 1024:.1f} Kio)")
+with open("output/shuffle_volumes.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["variante", "shuffle_write_octets"])
+    w.writerows(sorted(volumes.items()))
 
 with open("output/benchmark.csv", "w", newline="") as f:
     w = csv.writer(f)

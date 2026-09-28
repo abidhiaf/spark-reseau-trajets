@@ -1,7 +1,7 @@
 variante,run1,run2,run3,run4,run5,mediane_s
-RDD groupByKey,0.094,0.096,0.089,0.086,0.091,0.091
-RDD reduceByKey,0.085,0.089,0.085,0.084,0.089,0.085
-DataFrame groupBy - 200 partitions,0.018,0.015,0.016,0.016,0.015,0.016
-DataFrame groupBy - 8 partitions,0.017,0.016,0.016,0.016,0.017,0.016
-Sans cache (relit et revalide le CSV),0.205,0.21,0.208,0.199,0.199,0.205
-Avec cache,0.17,0.175,0.167,0.17,0.169,0.17
+RDD groupByKey,0.097,0.096,0.095,0.094,0.095,0.095
+RDD reduceByKey,0.092,0.09,0.095,0.094,0.093,0.093
+DataFrame groupBy - 200 partitions,0.02,0.021,0.019,0.02,0.02,0.02
+DataFrame groupBy - 8 partitions,0.019,0.017,0.017,0.017,0.017,0.017
+Sans cache (relit et revalide le CSV),0.212,0.216,0.214,0.207,0.215,0.214
+Avec cache,0.178,0.175,0.174,0.173,0.17,0.174
