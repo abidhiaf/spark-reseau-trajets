@@ -1,0 +1,6 @@
+motif,numero_ligne,ligne_brute
+valeur_non_positive,24001,"T024001,2026-03-12 08:10:00,S01,S02,0,1.2,annuel"
+station_inconnue,24002,"T024002,2026-03-12 08:15:00,S01,S99,15,2.4,mensuel"
+boucle,24003,"T024003,2026-03-12 08:20:00,S03,S03,12,1.9,occasionnel"
+valeur_non_numerique,24004,"T024004,2026-03-12 08:25:00,S05,S06,inconnu,2.1,annuel"
+doublon_id,24005,"T000001,2026-01-01 00:00:00,S01,S02,10,1.5,annuel"

@@ -10,4 +10,4 @@
 | 5 | Graphe | 09 | commit + push |
 | 6 | README + rapport PDF | — | commit final, push, **zip** |
 
-- [ ] 0  - [ ] 1  - [ ] 2  - [ ] 3  - [ ] 4  - [ ] 5  - [ ] 6
+- [x] 0  - [ ] 1  - [ ] 2  - [ ] 3  - [ ] 4  - [ ] 5  - [ ] 6

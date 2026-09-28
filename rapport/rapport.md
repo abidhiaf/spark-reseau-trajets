@@ -20,7 +20,7 @@ pipeline, choix de PySpark et pourquoi.
 
 | Élément | Version |
 |---|---|
-| Spark / PySpark | 3.5.3 |
+| PySpark (pip) / moteur Spark affiché | 3.5.3 / 3.5.0 |
 | Python | 3.12 |
 | Java | 17.0.12 |
 | Mode d'exécution | local[*] (macOS) |
@@ -33,12 +33,41 @@ Commande de lancement : voir README.
 [TOI] Décrire la structure typée choisie (dataclass/namedtuple) et les conversions.
 
 ## 2.2 Règles de rejet
-[CHIFFRES] Tableau : motif | règle | justification
 
-[TOI] Justifier la règle déterministe pour les doublons.
+Les règles sont appliquées dans l'ordre ci-dessous ; une ligne reçoit le motif de la
+première règle qu'elle viole, ce qui garantit valides + rejetées = lignes lues.
+
+| Ordre | Motif | Règle |
+|---|---|---|
+| 1 | format_invalide | 7 champs non vides attendus |
+| 2 | date_invalide | `date_heure` au format `yyyy-MM-dd HH:mm:ss` |
+| 3 | station_inconnue | départ et arrivée présents dans `stations.csv` |
+| 4 | valeur_non_numerique | durée et distance convertibles en nombre |
+| 5 | valeur_non_positive | durée > 0 et distance > 0 |
+| 6 | boucle | station de départ ≠ station d'arrivée |
+| 7 | doublon_id | `trajet_id` unique (voir règle ci-dessous) |
+
+**Règle des doublons.** Lorsqu'un même `trajet_id` apparaît plusieurs fois, seule la
+première occurrence dans l'ordre du fichier (numérotée avec `zipWithIndex`) est conservée.
+
+[TOI] 2-3 phrases : pourquoi cette règle est déterministe, pourquoi elle est préférable
+à « garder la date la plus ancienne » ici (les deux T000001 ont un contenu différent).
+
+[TOI] Contrôles supplémentaires faits en exploration (00_exploration.py) sans anomalie
+trouvée : champs vides, valeurs d'abonnement, plage de dates (01/01 → 31/03/2026),
+vitesses (7,2 à 16,8 km/h).
 
 ## 2.3 Bilan des rejets
-[CHIFFRES] Tableau : motif | nombre de lignes
+
+| Motif | Lignes | Ligne du fichier |
+|---|---|---|
+| valeur_non_positive | 1 | 24001 (durée = 0) |
+| station_inconnue | 1 | 24002 (S99) |
+| boucle | 1 | 24003 (S03 → S03) |
+| valeur_non_numerique | 1 | 24004 (durée = « inconnu ») |
+| doublon_id | 1 | 24005 (T000001, déjà vu ligne 1) |
+| **Total rejeté** | **5** | |
+| **Trajets valides** | **24 000** | |
 
 ![Bilan des rejets](../captures/01_bilan_rejets.png)
 
