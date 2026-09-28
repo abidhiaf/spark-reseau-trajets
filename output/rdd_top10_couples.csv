@@ -1,0 +1,11 @@
+rang,station_depart,nom_depart,station_arrivee,nom_arrivee,nb_trajets
+1,S27,Station 27,S13,Station 13,33
+2,S08,Station 08,S21,Station 21,32
+3,S35,Station 35,S13,Station 13,32
+4,S05,Station 05,S31,Station 31,31
+5,S07,Station 07,S09,Station 09,31
+6,S09,Station 09,S07,Station 07,31
+7,S15,Station 15,S17,Station 17,31
+8,S16,Station 16,S24,Station 24,31
+9,S16,Station 16,S26,Station 26,30
+10,S32,Station 32,S23,Station 23,30

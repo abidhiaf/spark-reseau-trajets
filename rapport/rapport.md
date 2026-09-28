@@ -50,12 +50,25 @@ première règle qu'elle viole, ce qui garantit valides + rejetées = lignes lue
 **Règle des doublons.** Lorsqu'un même `trajet_id` apparaît plusieurs fois, seule la
 première occurrence dans l'ordre du fichier (numérotée avec `zipWithIndex`) est conservée.
 
-[TOI] 2-3 phrases : pourquoi cette règle est déterministe, pourquoi elle est préférable
-à « garder la date la plus ancienne » ici (les deux T000001 ont un contenu différent).
+Les deux lignes T000001 n'ont pas le même contenu : la ligne 2 est un trajet S08 → S19
+le 2 janvier (40 min), la ligne 24006 un trajet S01 → S02 le 1er janvier à minuit (10 min).
+Ce n'est donc pas une copie qu'on pourrait supprimer sans réfléchir, mais un conflit :
+deux trajets différents avec le même identifiant. Il faut une règle pour choisir lequel garder.
 
-[TOI] Contrôles supplémentaires faits en exploration (00_exploration.py) sans anomalie
-trouvée : champs vides, valeurs d'abonnement, plage de dates (01/01 → 31/03/2026),
-vitesses (7,2 à 16,8 km/h).
+Au moment de la lecture, `zipWithIndex` donne à chaque ligne son numéro de position dans le
+fichier. Ce numéro ne change jamais, quelle que soit la façon dont Spark découpe les données
+en partitions. En gardant toujours la plus petite position, on garde toujours la même ligne,
+à chaque exécution : la règle est déterministe.
+
+Garder la date la plus ancienne aurait été une autre option, mais elle conserverait ici la
+ligne 24006 : une ligne de contrôle ajoutée en fin de fichier, datée pile de minuit le
+1er janvier, donc suspecte.
+
+L'énoncé précise que les cinq dernières lignes ne sont pas forcément les seules anomalies.
+Avant d'écrire les règles, le script `00_exploration.py` a donc contrôlé tout le fichier :
+nombre de colonnes (7 partout), champs vides (aucun), valeurs de `type_abonnement`
+(uniquement annuel, mensuel, occasionnel), plage de dates (du 01/01 au 31/03/2026) et
+vitesses moyennes (entre 7,2 et 16,8 km/h, réalistes). Aucune autre anomalie n'est apparue.
 
 ## 2.3 Bilan des rejets
 
@@ -72,20 +85,75 @@ vitesses (7,2 à 16,8 km/h).
 ![Bilan des rejets](../captures/01_bilan_rejets.png)
 
 ## 2.4 Contrôle manuel
-[TOI] 3-4 lignes du CSV vérifiées à la main vs résultat du pipeline.
+Quelques lignes du CSV ont été vérifiées à la main et comparées au résultat du pipeline :
+
+| Ligne | Vérification manuelle | Attendu | Pipeline |
+|---|---|---|---|
+| T000002 | S26 et S04 existent, 36 min et 9,5 km positifs, S26 ≠ S04 | valide | valide ✅ |
+| T000003 | S17 et S14 existent, 64 min et 14,38 km positifs, S17 ≠ S14 | valide | valide ✅ |
+| T000001 (ligne 2) | première occurrence de l'identifiant | gardée | gardée ✅ |
+| T000001 (ligne 24006) | identifiant déjà vu ligne 2 | rejetée | `doublon_id` ✅ |
+
+Le pipeline donne exactement le résultat attendu (capture 01).
 
 ![Contrôle manuel](../captures/02_controle_manuel.png)
 
 # 3. Indicateurs avec l'API RDD
 
+Tous les indicateurs sont calculés sur les 24 000 trajets valides (script
+`02_rdd_indicateurs.py`), puis enrichis avec le nom des stations par `join`.
+
 ## 3.1 Départs et arrivées par station
-[CHIFFRES] + ![Départs/arrivées](../captures/03_rdd_departs_arrivees.png)
+
+Un `flatMap` transforme chaque trajet en deux événements, `((départ, "depart"), 1)` et
+`((arrivée, "arrivee"), 1)`, qui sont comptés par `reduceByKey` puis séparés par `filter`.
+Le résultat complet (36 stations) est dans `output/rdd_departs_arrivees.csv`.
+
+| | Min | Max |
+|---|---|---|
+| Départs | 633 (S30) | 724 (S14) |
+| Arrivées | 633 (S04, S08) | 703 (S11, S19) |
+
+Contrôle de cohérence : total des départs = total des arrivées = 24 000, le nombre de
+trajets valides.
+
+![Départs/arrivées](../captures/03_rdd_departs_arrivees.png)
 
 ## 3.2 Durée moyenne par zone de départ
-[CHIFFRES] + [TOI] expliquer le couple (somme, nombre).
+
+Chaque trajet devient `(zone, (durée, 1))`. `reduceByKey` additionne les couples, et la
+division n'est faite qu'à la fin : une moyenne de moyennes partielles serait fausse si les
+partitions n'ont pas la même taille.
+
+| Zone | Somme (min) | Trajets | Moyenne (min) |
+|---|---|---|---|
+| 1 | 315 584 | 7 902 | 39,94 |
+| 2 | 318 854 | 8 091 | 39,41 |
+| 3 | 317 285 | 8 007 | 39,63 |
+
+Les trois zones ont des durées moyennes très proches, autour de 40 minutes.
 
 ## 3.3 Top 10 des couples départ–arrivée
-[CHIFFRES] + ![Top 10](../captures/04_rdd_top10.png)
+
+| Rang | Départ | Arrivée | Trajets |
+|---|---|---|---|
+| 1 | S27 | S13 | 33 |
+| 2 | S08 | S21 | 32 |
+| 3 | S35 | S13 | 32 |
+| 4 | S05 | S31 | 31 |
+| 5 | S07 | S09 | 31 |
+| 6 | S09 | S07 | 31 |
+| 7 | S15 | S17 | 31 |
+| 8 | S16 | S24 | 31 |
+| 9 | S16 | S26 | 30 |
+| 10 | S32 | S23 | 30 |
+
+Quatre couples ont 30 trajets pour deux places restantes. Pour garder un classement
+déterministe, les égalités sont départagées par ordre alphabétique (départ puis arrivée).
+On remarque aussi que S07 → S09 et S09 → S07 sont tous les deux dans le top : c'est un axe
+utilisé dans les deux sens.
+
+![Top 10](../captures/04_rdd_top10.png)
 
 # 4. API DataFrame et couche Parquet
 
