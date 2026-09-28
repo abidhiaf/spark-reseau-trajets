@@ -16,7 +16,9 @@ def creer_spark(nom):
     os.environ["PYSPARK_PYTHON"] = sys.executable
     os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
     from pyspark.sql import SparkSession
-    spark = SparkSession.builder.master("local[*]").appName(nom).getOrCreate()
+    spark = (SparkSession.builder.master("local[*]").appName(nom)
+                         .config("spark.ui.showConsoleProgress", "false")
+                         .getOrCreate())
     spark.sparkContext.setLogLevel("ERROR")
     spark.sparkContext.addPyFile(os.path.join(os.path.dirname(__file__), "commun.py"))
     return spark

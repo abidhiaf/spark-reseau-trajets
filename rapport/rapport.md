@@ -158,14 +158,60 @@ utilisé dans les deux sens.
 # 4. API DataFrame et couche Parquet
 
 ## 4.1 Schéma explicite et indicateurs
-![Schéma DataFrame](../captures/05_df_schema.png)
+
+Le script `03_dataframe_parquet.py` lit les CSV avec un `StructType` explicite : les types
+(timestamp, double, string) sont déclarés au lieu d'être devinés par `inferSchema`. En mode
+`PERMISSIVE`, une valeur non convertible comme la durée « inconnu » devient `null`, puis
+est écartée par `dropna`. Les mêmes règles qu'en RDD sont réécrites avec des colonnes :
+`left_semi` join pour les stations connues, `filter` pour les valeurs positives et les
+boucles, et une fenêtre `row_number()` par `trajet_id` pour garder la première occurrence.
+Résultat : **24 000 trajets valides**, comme en RDD.
+
+Les trois indicateurs de la partie 3 ont été recalculés avec `groupBy` / `agg` / `join`.
+
+![Schéma DataFrame et premiers indicateurs](../captures/05_df_schema.png)
+
+![Top 10 en DataFrame](../captures/05b_df_top10.png)
 
 ## 4.2 Écriture Parquet partitionnée par mois
-![Arborescence Parquet](../captures/06_parquet_partitions.png)
+
+Une colonne `mois` (`yyyy-MM`) est ajoutée, puis les trajets nettoyés sont écrits avec
+`partitionBy("mois")` dans `output/parquet/trajets/`. Spark crée un sous-dossier par mois ;
+une requête filtrée sur un mois ne lit que le dossier concerné (*partition pruning*).
+
+| Partition | Trajets |
+|---|---|
+| mois=2026-01 | 8 286 |
+| mois=2026-02 | 7 375 |
+| mois=2026-03 | 8 339 |
+| **Total** | **24 000** |
+
+La relecture du Parquet redonne bien 24 000 trajets.
+
+![Comparaison et partitions Parquet](../captures/06_parquet_partitions.png)
+
+![Fichiers Parquet par partition](../captures/06b_fichiers_parquet.png)
 
 ## 4.3 Comparaison RDD / DataFrame
-[CHIFFRES] Tableau : critère | RDD | DataFrame (schéma, lisibilité, résultats identiques ?)
-[TOI] Conclusion personnelle.
+
+Le script compare automatiquement les sorties des deux versions : départs/arrivées, durée
+moyenne par zone et top 10 sont **identiques** (`True` pour les trois).
+
+| Critère | RDD | DataFrame |
+|---|---|---|
+| Schéma | implicite (namedtuple Python, types vérifiés à la main) | explicite (`StructType`), vérifié à la lecture |
+| Conversion / erreurs | `try/except` dans une fonction Python | `null` en mode PERMISSIVE, puis `dropna` |
+| Lisibilité | tuples imbriqués (`kv[1][0][2]`), plus difficile à relire | colonnes nommées, proche du SQL |
+| Optimisation | aucune : Spark exécute exactement le code écrit | optimiseur Catalyst (plan logique → physique) |
+| Contrôle | total, bas niveau | moins fin mais suffisant ici |
+| Résultats | référence | identiques ✅ |
+
+En pratique, la version DataFrame est plus courte et plus lisible : les colonnes ont un nom,
+le schéma est contrôlé dès la lecture, et Catalyst optimise le plan sans intervention.
+La version RDD reste utile pour comprendre ce que Spark fait réellement (chaque `map`,
+chaque shuffle est écrit explicitement) et pour les traitements difficiles à exprimer en
+colonnes, comme la validation ligne par ligne avec un motif de rejet précis. Dans ce projet,
+les deux API donnent exactement les mêmes résultats.
 
 # 5. Plan d'exécution et optimisation
 
