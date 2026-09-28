@@ -49,11 +49,24 @@ première règle qu'elle viole, ce qui garantit valides + rejetées = lignes lue
 |---|---|---|
 | 1 | format_invalide | 7 champs non vides attendus |
 | 2 | date_invalide | `date_heure` au format `yyyy-MM-dd HH:mm:ss` |
-| 3 | station_inconnue | départ et arrivée présents dans `stations.csv` |
-| 4 | valeur_non_numerique | durée et distance convertibles en nombre |
-| 5 | valeur_non_positive | durée > 0 et distance > 0 |
-| 6 | boucle | station de départ ≠ station d'arrivée |
-| 7 | doublon_id | `trajet_id` unique (voir règle ci-dessous) |
+| 3 | hors_periode | date comprise entre le 01/01/2026 et le 31/03/2026 (les trois mois étudiés) |
+| 4 | station_inconnue | départ et arrivée présents dans `stations.csv` |
+| 5 | valeur_non_numerique | durée et distance convertibles en nombre **fini** (`nan` et `inf` refusés) |
+| 6 | valeur_non_positive | durée > 0 et distance > 0 |
+| 7 | boucle | station de départ ≠ station d'arrivée |
+| 8 | abonnement_inconnu | `type_abonnement` ∈ {annuel, mensuel, occasionnel} |
+| 9 | doublon_id | `trajet_id` unique (voir règle ci-dessous) |
+
+Point de vigilance : en Python, `float("nan")` et `float("inf")` ne lèvent pas d'erreur,
+et `nan <= 0` vaut `False`. Sans le test `math.isfinite`, une durée `nan` passerait toutes
+les règles. Les règles 3 et 8 ne rejettent aucune ligne dans ce fichier, mais elles
+protègent le pipeline contre des données futures.
+
+**Tests unitaires.** `tests/test_regles.py` vérifie 15 cas limites sans Spark : un cas par
+motif, `nan`, `inf`, distance négative, bornes exactes de la période, et l'ordre de priorité
+des règles. Résultat : 15/15.
+
+![Tests unitaires des règles](../captures/10_tests.png)
 
 **Règle des doublons.** Lorsqu'un même `trajet_id` apparaît plusieurs fois, seule la
 première occurrence dans l'ordre du fichier (numérotée avec `zipWithIndex`) est conservée.
@@ -80,15 +93,19 @@ vitesses moyennes (entre 7,2 et 16,8 km/h, réalistes). Aucune autre anomalie n'
 
 ## 2.3 Bilan des rejets
 
-| Motif | Lignes | Ligne du fichier |
+| Motif | Lignes | N° de ligne de données |
 |---|---|---|
-| valeur_non_positive | 1 | 24001 (durée = 0) |
+| format_invalide, date_invalide, hors_periode, abonnement_inconnu | 0 | — |
 | station_inconnue | 1 | 24002 (S99) |
-| boucle | 1 | 24003 (S03 → S03) |
 | valeur_non_numerique | 1 | 24004 (durée = « inconnu ») |
-| doublon_id | 1 | 24005 (T000001, déjà vu ligne 1) |
+| valeur_non_positive | 1 | 24001 (durée = 0) |
+| boucle | 1 | 24003 (S03 → S03) |
+| doublon_id | 1 | 24005 (T000001, déjà vu en ligne de données 1) |
 | **Total rejeté** | **5** | |
 | **Trajets valides** | **24 000** | |
+
+Les numéros ci-dessus sont ceux affichés par le script (en-tête exclu) : la ligne de
+données *n* correspond à la ligne *n + 1* du fichier CSV, celle qu'affiche `grep -n`.
 
 ![Bilan des rejets](../captures/01_bilan_rejets.png)
 
@@ -124,6 +141,11 @@ Le résultat complet (36 stations) est dans `output/rdd_departs_arrivees.csv`.
 
 Contrôle de cohérence : total des départs = total des arrivées = 24 000, le nombre de
 trajets valides.
+
+Contrôle manuel d'un indicateur : on recompte les départs de S01 directement dans le CSV,
+sans Spark. `awk` trouve 650 lignes avec `station_depart = S01`, dont 3 lignes rejetées
+(T024001, T024002 et le doublon T000001 de la dernière ligne). 650 − 3 = **647**, exactement
+la valeur calculée par le pipeline.
 
 ![Départs/arrivées](../captures/03_rdd_departs_arrivees.png)
 
@@ -161,8 +183,6 @@ déterministe, les égalités sont départagées par ordre alphabétique (dépar
 On remarque aussi que S07 → S09 et S09 → S07 sont tous les deux dans le top : c'est un axe
 utilisé dans les deux sens.
 
-![Top 10](../captures/04_rdd_top10.png)
-
 # 4. API DataFrame et couche Parquet
 
 ## 4.1 Schéma explicite et indicateurs
@@ -179,8 +199,6 @@ Les trois indicateurs de la partie 3 ont été recalculés avec `groupBy` / `agg
 
 ![Schéma DataFrame et premiers indicateurs](../captures/05_df_schema.png)
 
-![Top 10 en DataFrame](../captures/05b_df_top10.png)
-
 ## 4.2 Écriture Parquet partitionnée par mois
 
 Une colonne `mois` (`yyyy-MM`) est ajoutée, puis les trajets nettoyés sont écrits avec
@@ -195,10 +213,6 @@ une requête filtrée sur un mois ne lit que le dossier concerné (*partition pr
 | **Total** | **24 000** |
 
 La relecture du Parquet redonne bien 24 000 trajets.
-
-![Comparaison et partitions Parquet](../captures/06_parquet_partitions.png)
-
-![Fichiers Parquet par partition](../captures/06b_fichiers_parquet.png)
 
 ## 4.3 Comparaison RDD / DataFrame
 
@@ -244,8 +258,8 @@ de plusieurs partitions : Spark doit faire un *shuffle* et démarre un nouveau s
 
 **Lignée RDD (`toDebugString`, capture 07).** Chaque `+-` marque une frontière de stage,
 c'est-à-dire un shuffle. Pour le simple comptage des départs, on voit trois shuffles : le
-`reduceByKey` de la détection des doublons (`commun.py:81`), le `join` qui garde la première
-occurrence (`commun.py:82`) et le `reduceByKey` final. Les lignes `CachedPartitions`
+`reduceByKey` de la détection des doublons, le `join` qui garde la première
+occurrence et le `reduceByKey` final. Les lignes `CachedPartitions`
 montrent que le RDD des trajets valides est lu depuis la mémoire (667 Kio) au lieu d'être
 recalculé.
 
@@ -264,14 +278,12 @@ Catalyst produit :
 
 ![Plan physique](../captures/07b_explain.png)
 
-**Interface Spark (captures 08 et 08b).** L'onglet *Stages* montre les colonnes *Shuffle
+**Interface Spark (capture 08).** L'onglet *Stages* montre les colonnes *Shuffle
 Write* et *Shuffle Read*. Par exemple, le comptage des départs par station n'écrit que
 2,1 Kio de shuffle, alors que le comptage des couples départ–arrivée en écrit 45,1 Kio : il
 y a beaucoup plus de clés distinctes (1 260 couples distincts contre 36 stations).
 
 ![Spark UI - Stages](../captures/08_spark_ui.png)
-
-![Spark UI - SQL](../captures/08b_spark_ui_sql.png)
 
 ## 5.3 groupByKey vs reduceByKey, partitionnement et cache
 
@@ -286,8 +298,6 @@ puis 5 exécutions chronométrées par variante (`output/benchmark.csv`).
 | DataFrame – 8 partitions de shuffle | 0,017 | 0,016 | 0,016 | 0,016 | 0,017 | **0,016** |
 | Deux indicateurs sans cache | 0,205 | 0,210 | 0,208 | 0,199 | 0,199 | **0,205** |
 | Deux indicateurs avec cache | 0,170 | 0,175 | 0,167 | 0,170 | 0,169 | **0,170** |
-
-![Benchmark](../captures/07c_benchmark.png)
 
 Volume écrit par le shuffle, relevé via l'API REST de l'interface Spark
 (`output/shuffle_volumes.csv`) :
@@ -370,7 +380,8 @@ Limites :
   volume : elles illustrent des mécanismes (volume de shuffle, cache) sans prouver un gain
   général.
 - **Règle des doublons.** « Première occurrence » est déterministe mais repose sur l'ordre
-  du fichier. Si les données arrivaient de plusieurs fichiers, il faudrait une autre clé
+  du fichier. En RDD, `zipWithIndex` le garantit ; en DataFrame, `monotonically_increasing_id`
+  le respecte ici parce qu'il n'y a qu'un seul fichier source. Si les données arrivaient de plusieurs fichiers, il faudrait une autre clé
   d'ordre, par exemple une date d'ingestion.
 - **Pas de table transactionnelle.** Le Parquet ne gère ni mises à jour ni historique. Une
   couche Delta Lake ou Iceberg serait l'étape suivante pour un vrai lakehouse.

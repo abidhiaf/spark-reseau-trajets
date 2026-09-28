@@ -1,6 +1,10 @@
 motif,nb_lignes
-boucle,1
-doublon_id,1
+format_invalide,0
+date_invalide,0
+hors_periode,0
 station_inconnue,1
 valeur_non_numerique,1
 valeur_non_positive,1
+boucle,1
+abonnement_inconnu,0
+doublon_id,1

@@ -2,7 +2,7 @@
 import csv
 import os
 
-from commun import charger_trajets, creer_spark, lire_stations
+from commun import MOTIFS, charger_trajets, creer_spark, lire_stations
 
 spark = creer_spark("01_ingestion")
 sc = spark.sparkContext
@@ -14,7 +14,8 @@ valides, rejets = charger_trajets(sc, ids_stations)
 
 nb_brut = sc.textFile("data/trajets.csv").count() - 1
 nb_valides = valides.count()
-bilan = sorted(rejets.map(lambda r: (r[0], 1)).reduceByKey(lambda a, b: a + b).collect())
+comptes = dict(rejets.map(lambda r: (r[0], 1)).reduceByKey(lambda a, b: a + b).collect())
+bilan = [(motif, comptes.get(motif, 0)) for motif in MOTIFS]   # ordre des règles, zéros inclus
 nb_rejets = sum(n for _, n in bilan)
 
 print("=" * 50)
@@ -24,7 +25,7 @@ print(f"Trajets valides         : {nb_valides}")
 print(f"Lignes rejetées         : {nb_rejets}")
 print(f"Contrôle valides+rejets : {nb_valides + nb_rejets} (= {nb_brut} ?)")
 print("-" * 50)
-print("BILAN DES REJETS PAR MOTIF")
+print("BILAN DES REJETS PAR MOTIF (dans l'ordre d'application des règles)")
 for motif, n in bilan:
     print(f"  {motif:<22} {n}")
 print("-" * 50)

@@ -1,4 +1,5 @@
 """Fonctions partagées : lecture des CSV, structure typée et règles de qualité."""
+import math
 import os
 import sys
 from collections import namedtuple
@@ -9,6 +10,12 @@ Trajet = namedtuple("Trajet", ["trajet_id", "date_heure", "station_depart", "sta
                                "duree_min", "distance_km", "type_abonnement"])
 
 FORMAT_DATE = "%Y-%m-%d %H:%M:%S"
+DEBUT_PERIODE = datetime(2026, 1, 1)
+FIN_PERIODE = datetime(2026, 4, 1)          # borne exclue : trajets de janvier à mars 2026
+ABONNEMENTS = {"annuel", "mensuel", "occasionnel"}
+MOTIFS = ["format_invalide", "date_invalide", "hors_periode", "station_inconnue",
+          "valeur_non_numerique", "valeur_non_positive", "boucle", "abonnement_inconnu",
+          "doublon_id"]
 
 
 def creer_spark(nom):
@@ -47,16 +54,22 @@ def valider(ligne, ids_stations):
         date = datetime.strptime(date_txt, FORMAT_DATE)
     except ValueError:
         return ("REJET", "date_invalide")
+    if not DEBUT_PERIODE <= date < FIN_PERIODE:
+        return ("REJET", "hors_periode")
     if dep not in ids_stations or arr not in ids_stations:
         return ("REJET", "station_inconnue")
     try:
         duree, dist = float(duree_txt), float(dist_txt)
     except ValueError:
         return ("REJET", "valeur_non_numerique")
+    if not (math.isfinite(duree) and math.isfinite(dist)):   # "nan", "inf" passent float()
+        return ("REJET", "valeur_non_numerique")
     if duree <= 0 or dist <= 0:
         return ("REJET", "valeur_non_positive")
     if dep == arr:
         return ("REJET", "boucle")
+    if abo not in ABONNEMENTS:
+        return ("REJET", "abonnement_inconnu")
     return ("OK", Trajet(tid, date, dep, arr, duree, dist, abo))
 
 

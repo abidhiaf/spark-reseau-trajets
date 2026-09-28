@@ -47,7 +47,10 @@ valides_regles = (brut
     .join(ids.withColumnRenamed("station_id", "station_depart"), "station_depart", "left_semi")
     .join(ids.withColumnRenamed("station_id", "station_arrivee"), "station_arrivee", "left_semi")
     .filter((F.col("duree_min") > 0) & (F.col("distance_km") > 0))
-    .filter(F.col("station_depart") != F.col("station_arrivee")))
+    .filter(F.col("station_depart") != F.col("station_arrivee"))
+    .filter((F.col("date_heure") >= "2026-01-01") & (F.col("date_heure") < "2026-04-01"))
+    .filter(~F.isnan("duree_min") & ~F.isnan("distance_km"))
+    .filter(F.col("type_abonnement").isin("annuel", "mensuel", "occasionnel")))
 
 # Doublons : première occurrence dans l'ordre du fichier (num_ligne croissant)
 w = Window.partitionBy("trajet_id").orderBy("num_ligne")

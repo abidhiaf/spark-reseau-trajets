@@ -27,9 +27,18 @@ source .venv/bin/activate
 uv pip install -r requirements.txt   # ou : pip install -r requirements.txt
 ```
 
-## Reproduction (depuis la racine du projet, dans cet ordre)
+## Reproduction
+
+Tout relancer d'un coup (tests + étapes 00 à 05) :
 
 ```bash
+./run_all.sh
+```
+
+Ou étape par étape, depuis la racine du projet et dans cet ordre :
+
+```bash
+python tests/test_regles.py         # 15 tests unitaires des règles qualité (sans Spark)
 python src/00_exploration.py        # exploration des anomalies (lecture seule)
 python src/01_ingestion.py          # règles qualité, bilan des rejets
 python src/02_rdd_indicateurs.py    # indicateurs RDD
@@ -45,6 +54,7 @@ L'étape 04 lit le Parquet écrit par l'étape 03.
 
 ```
 data/        stations.csv, trajets.csv (données fournies)
+tests/       test_regles.py (tests unitaires des règles)
 src/         commun.py (structures typées, règles qualité) + scripts 00 à 05
 output/      sorties chiffrées (CSV) ; output/parquet/ est régénéré par l'étape 03
 captures/    captures des exécutions et de l'interface Spark
@@ -65,6 +75,15 @@ rapport/     rapport.md et rapport.pdf
 
 ## Règles de qualité (résumé)
 
-Format (7 champs), date valide, stations connues, durée et distance numériques et strictement positives,
-pas de boucle, `trajet_id` unique. Pour les doublons, on garde la **première occurrence dans l'ordre du fichier**.
-Résultat : 24 005 lignes lues, 24 000 valides, 5 rejetées (1 par motif). Détails dans le rapport, section 2.
+Format (7 champs), date valide et comprise dans la période janvier–mars 2026, stations connues,
+durée et distance numériques finies et strictement positives, pas de boucle, abonnement connu, `trajet_id` unique. Pour les doublons, on garde la **première occurrence dans l'ordre du fichier**.
+Résultat : 24 005 lignes lues, 24 000 valides, 5 rejetées. Détails dans le rapport, section 2.
+
+## Rapport
+
+`rapport/rapport.pdf` (8 pages) est généré depuis `rapport/rapport.md` :
+
+```bash
+pip install markdown pymupdf
+python rapport/build_pdf.py
+```
